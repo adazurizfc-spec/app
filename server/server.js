@@ -65,6 +65,7 @@ app.post("/api/clip", async (req, res) => {
   try {
     await run([
       "--no-playlist",
+      "--js-runtimes", "node",
       "-f", "bv*[ext=mp4][height<=1080]+ba[ext=m4a]/b[ext=mp4]/b",
       "--download-sections", `*${s}-${e}`,
       "--force-keyframes-at-cuts",
