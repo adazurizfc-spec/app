@@ -13,29 +13,48 @@ const toSeconds = (t) => {
 const hms = (s) =>
   [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60].map((n) => String(n).padStart(2, "0")).join(":");
 
-const videoId = (value) => {
-  try {
-    const u = new URL(value);
-    const host = u.hostname.replace(/^www\.|^m\./, "");
-    if (host === "youtu.be") return u.pathname.slice(1) || null;
-    if (host === "youtube.com") {
-      if (u.searchParams.get("v")) return u.searchParams.get("v");
-      const m = u.pathname.match(/\/(shorts|embed|live)\/([\w-]{11})/);
-      return m ? m[2] : null;
-    }
-  } catch {}
-  return null;
-};
+function upload(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", `${API}/api/upload`);
+    x.setRequestHeader("Content-Type", "application/octet-stream");
+    x.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100));
+    x.onload = () => {
+      let d = {};
+      try { d = JSON.parse(x.responseText); } catch {}
+      x.status === 200 && d.id ? resolve(d.id) : reject(new Error(d.error || "Falha no envio do vídeo."));
+    };
+    x.onerror = () => reject(new Error("Não foi possível conectar ao servidor. Tente de novo em instantes."));
+    x.send(file);
+  });
+}
 
 export default function Home() {
-  const [url, setUrl] = useState("");
+  const [preview, setPreview] = useState("");
+  const [videoId, setVideoId] = useState("");
+  const [up, setUp] = useState({ status: "idle", pct: 0, error: "" });
   const [rows, setRows] = useState([newRow(), newRow(), newRow()]);
-  const id = videoId(url);
 
   const patch = (rid, changes) => setRows((rs) => rs.map((r) => (r.id === rid ? { ...r, ...changes } : r)));
 
+  async function onFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (preview) URL.revokeObjectURL(preview);
+    setPreview(URL.createObjectURL(file));
+    setVideoId("");
+    setUp({ status: "loading", pct: 0, error: "" });
+    try {
+      const id = await upload(file, (pct) => setUp({ status: "loading", pct, error: "" }));
+      setVideoId(id);
+      setUp({ status: "done", pct: 100, error: "" });
+    } catch (err) {
+      setUp({ status: "error", pct: 0, error: err.message });
+    }
+  }
+
   async function cut(row) {
-    if (!id) return patch(row.id, { status: "error", error: "Cole um link válido do YouTube acima." });
+    if (!videoId) return patch(row.id, { status: "error", error: "Envie o vídeo MP4 primeiro." });
     const s = toSeconds(row.start);
     const e = toSeconds(row.end);
     if (s === null || e === null) return patch(row.id, { status: "error", error: "Use o formato mm:ss ou hh:mm:ss." });
@@ -46,7 +65,7 @@ export default function Home() {
       const res = await fetch(`${API}/api/clip`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, start: hms(s), end: hms(e) }),
+        body: JSON.stringify({ id: videoId, start: hms(s), end: hms(e) }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -66,21 +85,18 @@ export default function Home() {
   return (
     <main>
       <h1>Cortador de vídeo</h1>
-      <p className="sub">Cole o link, marque início e fim e baixe o trecho em MP4.</p>
+      <p className="sub">Envie um vídeo MP4, marque início e fim e baixe cada trecho.</p>
 
       <div className="urlbar">
-        <input
-          type="url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://www.youtube.com/watch?v=..."
-          aria-label="Link do YouTube"
-        />
+        <input type="file" accept="video/mp4,.mp4" onChange={onFile} aria-label="Vídeo MP4" />
       </div>
+      {up.status === "loading" && <p className="msg">Enviando vídeo… {up.pct}%</p>}
+      {up.status === "done" && <p className="msg">Vídeo pronto. Preencha os tempos abaixo.</p>}
+      {up.status === "error" && <p className="msg err">{up.error}</p>}
 
-      {id && (
+      {preview && (
         <div className="player">
-          <iframe src={`https://www.youtube.com/embed/${id}`} title="Vídeo" allowFullScreen />
+          <video src={preview} controls style={{ width: "100%", height: "100%" }} />
         </div>
       )}
 
@@ -103,11 +119,6 @@ export default function Home() {
       </div>
 
       <button className="ghost" onClick={() => setRows((rs) => [...rs, newRow()])}>Adicionar linha</button>
-
-      <p className="aviso">
-        Use apenas com vídeos seus ou que você tenha autorização para baixar. Baixar conteúdo do YouTube sem permissão
-        viola os Termos de Serviço da plataforma.
-      </p>
     </main>
   );
 }
